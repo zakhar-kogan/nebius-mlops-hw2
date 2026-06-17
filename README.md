@@ -94,6 +94,20 @@ uv run python scripts/load_data.py
 docker compose up -d
 ```
 
+Default `uv sync` installs the agent, eval, load-test, and observability
+client dependencies. The local H100 serving stack is optional because `vllm`
+pulls platform-specific Torch wheels:
+
+```bash
+uv sync --extra serve
+```
+
+The optional Agno comparison agent is installed separately:
+
+```bash
+uv sync --extra experiments
+```
+
 Sanity-check from your laptop browser:
 
   

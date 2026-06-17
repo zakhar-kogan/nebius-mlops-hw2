@@ -26,6 +26,7 @@ from langchain_openai import ChatOpenAI
 from langgraph.graph import END, START, StateGraph
 
 from agent import prompts
+from agent.deterministic_verifier import verify_deterministic
 from agent.execution import ExecutionResult, execute_sql
 from agent.schema import render_schema
 
@@ -51,6 +52,7 @@ class AgentState:
     execution: ExecutionResult | None = None
     verify_ok: bool = False
     verify_issue: str = ""
+    deterministic_issue: str = ""
     iteration: int = 0
     history: list[dict[str, Any]] = field(default_factory=list)
 
@@ -150,6 +152,33 @@ def execute_node(state: AgentState) -> dict:
     return {"execution": execution, "history": state.history + [entry]}
 
 
+def deterministic_verify_node(state: AgentState) -> dict:
+    """Run cheap, concrete SQL checks before spending an LLM verifier call."""
+    issue = verify_deterministic(
+        db_id=state.db_id,
+        question=state.question,
+        sql=state.sql,
+        execution=state.execution,
+    )
+    entry = {
+        "node": "deterministic_verify",
+        "iteration": state.iteration,
+        "ok": issue is None,
+        "issue": issue or "",
+    }
+    if issue:
+        return {
+            "verify_ok": False,
+            "verify_issue": issue,
+            "deterministic_issue": issue,
+            "history": state.history + [entry],
+        }
+    return {
+        "deterministic_issue": "",
+        "history": state.history + [entry],
+    }
+
+
 def verify_node(state: AgentState) -> dict:
     """Decide whether state.execution plausibly answers state.question.
 
@@ -241,6 +270,14 @@ def route_after_verify(state: AgentState) -> str:
     return "revise"
 
 
+def route_after_deterministic_verify(state: AgentState) -> str:
+    if state.deterministic_issue:
+        if state.iteration >= MAX_ITERATIONS:
+            return "end"
+        return "revise"
+    return "verify"
+
+
 # ---- Graph wiring -----------------------------------------------------
 
 def build_graph():
@@ -248,13 +285,19 @@ def build_graph():
     g.add_node("attach_schema", _attach_schema)
     g.add_node("generate_sql", generate_sql_node)
     g.add_node("execute", execute_node)
+    g.add_node("deterministic_verify", deterministic_verify_node)
     g.add_node("verify", verify_node)
     g.add_node("revise", revise_node)
 
     g.add_edge(START, "attach_schema")
     g.add_edge("attach_schema", "generate_sql")
     g.add_edge("generate_sql", "execute")
-    g.add_edge("execute", "verify")
+    g.add_edge("execute", "deterministic_verify")
+    g.add_conditional_edges(
+        "deterministic_verify",
+        route_after_deterministic_verify,
+        {"verify": "verify", "revise": "revise", "end": END},
+    )
     g.add_conditional_edges(
         "verify",
         route_after_verify,
