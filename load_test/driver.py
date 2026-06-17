@@ -14,12 +14,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from datetime import datetime, timezone
 import json
+import os
 import random
 import time
 from pathlib import Path
 
 import aiohttp
+from dotenv import load_dotenv
+
+load_dotenv()
 
 ROOT = Path(__file__).resolve().parent.parent
 PERF_POOL = ROOT / "load_test" / "perf_pool.jsonl"
@@ -27,18 +32,57 @@ DEFAULT_OUT = ROOT / "results" / "load_test.json"
 AGENT_URL_DEFAULT = "http://localhost:8001/answer"
 
 
+def infer_inference_backend(base_url: str | None) -> str:
+    url = (base_url or "").lower()
+    if ":8000" in url and (
+        "localhost" in url
+        or "127.0.0.1" in url
+        or "host.docker.internal" in url
+        or "0.0.0.0" in url
+    ):
+        return "vllm"
+    return "hosted_api"
+
+
+def default_run_id(prefix: str) -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    return f"{prefix}_{stamp}"
+
+
+def camel_run_metadata(run_metadata: dict[str, str]) -> dict[str, str]:
+    load_run_id = run_metadata["load_run_id"]
+    return {
+        "environment": run_metadata["environment"],
+        "inferenceBackend": run_metadata["inference_backend"],
+        "promptVersion": run_metadata["prompt_version"],
+        "agentVersion": run_metadata["agent_version"],
+        "loadRunId": load_run_id,
+        "sessionId": load_run_id,
+    }
+
+
 async def fire_one(
     session: aiohttp.ClientSession,
     url: str,
     question: dict,
     results: list[dict],
+    run_metadata: dict[str, str],
 ) -> None:
-    payload = {"question": question["question"], "db": question["db_id"]}
+    payload = {
+        "question": question["question"],
+        "db": question["db_id"],
+        "tags": {
+            "run_type": "load",
+            "load_db_id": question["db_id"],
+            **run_metadata,
+        },
+    }
     t0 = time.monotonic()
     status = "ok"
     err: str | None = None
     try:
-        async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=120)) as resp:
+        timeout = aiohttp.ClientTimeout(total=120)
+        async with session.post(url, json=payload, timeout=timeout) as resp:
             await resp.read()
             if resp.status != 200:
                 status = "http_error"
@@ -64,6 +108,14 @@ async def drive(args: argparse.Namespace) -> None:
 
     rnd = random.Random(0)
     results: list[dict] = []
+    vllm_base_url = os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")
+    run_metadata = {
+        "environment": args.environment,
+        "inference_backend": args.inference_backend or infer_inference_backend(vllm_base_url),
+        "prompt_version": args.prompt_version,
+        "agent_version": args.agent_version,
+        "load_run_id": args.run_id or default_run_id("load"),
+    }
     interval = 1.0 / args.rps
 
     connector = aiohttp.TCPConnector(limit=0)
@@ -74,7 +126,9 @@ async def drive(args: argparse.Namespace) -> None:
         next_fire = start
         while time.monotonic() < deadline:
             q = rnd.choice(questions)
-            tasks.append(asyncio.create_task(fire_one(session, args.agent_url, q, results)))
+            tasks.append(asyncio.create_task(
+                fire_one(session, args.agent_url, q, results, run_metadata)
+            ))
             next_fire += interval
             sleep_for = next_fire - time.monotonic()
             if sleep_for > 0:
@@ -94,6 +148,7 @@ async def drive(args: argparse.Namespace) -> None:
 
     summary = {
         "requested_rps": args.rps,
+        "run_id": run_metadata["load_run_id"],
         "duration_seconds": args.duration,
         "wall_clock_seconds": wall,
         "total_requests": len(results),
@@ -109,7 +164,15 @@ async def drive(args: argparse.Namespace) -> None:
     }
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps({"summary": summary, "results": results}, indent=2))
+    args.out.write_text(json.dumps({
+        "metadata": {
+            **camel_run_metadata(run_metadata),
+            "agentUrl": args.agent_url,
+            "perfPool": str(PERF_POOL),
+        },
+        "summary": summary,
+        "results": results,
+    }, indent=2))
     print(json.dumps(summary, indent=2))
     print(f"Wrote {args.out}")
 
@@ -120,6 +183,20 @@ def main() -> None:
     p.add_argument("--duration", type=int, default=300, help="seconds to drive load")
     p.add_argument("--agent-url", default=AGENT_URL_DEFAULT)
     p.add_argument("--out", type=Path, default=DEFAULT_OUT)
+    p.add_argument(
+        "--run-id",
+        default=None,
+        help="metadata tag attached to Langfuse traces",
+    )
+    p.add_argument("--environment", default="staging")
+    p.add_argument(
+        "--inference-backend",
+        default=None,
+        choices=["hosted_api", "vllm"],
+        help="defaults from VLLM_BASE_URL: localhost:8000 => vllm, otherwise hosted_api",
+    )
+    p.add_argument("--prompt-version", default="p0_baseline")
+    p.add_argument("--agent-version", default="a0_baseline")
     args = p.parse_args()
     asyncio.run(drive(args))
 
