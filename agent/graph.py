@@ -19,6 +19,8 @@ from __future__ import annotations
 import os
 import re
 import json
+import time
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -57,6 +59,21 @@ def get_verify_mode() -> str:
     return mode
 
 
+def llm_cache_bust_enabled() -> bool:
+    return os.environ.get("AGENT_LLM_CACHE_BUST", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _cache_bust_suffix() -> str:
+    if not llm_cache_bust_enabled():
+        return ""
+    marker = uuid.uuid4().hex
+    return f"\n\nRequest marker: {marker}. Ignore this marker; it is not part of the question."
+
+
+def _duration_ms(start: float) -> float:
+    return round((time.perf_counter() - start) * 1000, 3)
+
+
 # Backward-compatible export for code that imports the previous constant.
 MAX_ITERATIONS = DEFAULT_MAX_ITERATIONS
 
@@ -91,7 +108,15 @@ def llm() -> ChatOpenAI:
 
 def _attach_schema(state: AgentState) -> dict:
     """Provided. Render the DB schema once at the start of the run."""
-    return {"schema": render_schema(state.db_id)}
+    start = time.perf_counter()
+    schema = render_schema(state.db_id)
+    return {
+        "schema": schema,
+        "history": state.history + [{
+            "node": "attach_schema",
+            "duration_ms": _duration_ms(start),
+        }],
+    }
 
 
 def _extract_sql(text: str) -> str:
@@ -141,24 +166,32 @@ def generate_sql_node(state: AgentState) -> dict:
     This node is wired and ready; fill in GENERATE_SQL_SYSTEM / GENERATE_SQL_USER
     in prompts.py to make it produce real queries.
     """
+    start = time.perf_counter()
     response = llm().invoke([
         ("system", prompts.generate_sql_system()),
         ("user", prompts.generate_sql_user().format(
             schema=state.schema,
             question=state.question,
-        )),
+        ) + _cache_bust_suffix()),
     ])
+    duration_ms = _duration_ms(start)
     sql = _extract_sql(response.content)
     iteration = state.iteration + 1
     return {
         "sql": sql,
         "iteration": iteration,
-        "history": state.history + [{"node": "generate_sql", "iteration": iteration, "sql": sql}],
+        "history": state.history + [{
+            "node": "generate_sql",
+            "iteration": iteration,
+            "sql": sql,
+            "duration_ms": duration_ms,
+        }],
     }
 
 
 def execute_node(state: AgentState) -> dict:
     """Provided. Runs the SQL and stores the result."""
+    start = time.perf_counter()
     execution = execute_sql(state.db_id, state.sql)
     entry = {
         "node": "execute",
@@ -168,12 +201,14 @@ def execute_node(state: AgentState) -> dict:
         "row_count": execution.row_count,
         "columns": execution.columns or [],
         "error": execution.error,
+        "duration_ms": _duration_ms(start),
     }
     return {"execution": execution, "history": state.history + [entry]}
 
 
 def deterministic_verify_node(state: AgentState) -> dict:
     """Run cheap, concrete SQL checks before spending an LLM verifier call."""
+    start = time.perf_counter()
     issue = verify_deterministic(
         db_id=state.db_id,
         question=state.question,
@@ -185,6 +220,7 @@ def deterministic_verify_node(state: AgentState) -> dict:
         "iteration": state.iteration,
         "ok": issue is None,
         "issue": issue or "",
+        "duration_ms": _duration_ms(start),
     }
     if issue:
         return {
@@ -217,6 +253,7 @@ def verify_node(state: AgentState) -> dict:
         if state.execution is not None
         else "ERROR: SQL was not executed."
     )
+    start = time.perf_counter()
     response = llm().invoke([
         ("system", prompts.verify_system()),
         ("user", prompts.verify_user().format(
@@ -224,8 +261,9 @@ def verify_node(state: AgentState) -> dict:
             schema=state.schema,
             sql=state.sql,
             execution=execution_text,
-        )),
+        ) + _cache_bust_suffix()),
     ])
+    duration_ms = _duration_ms(start)
     parsed = _extract_json(response.content)
     ok = _coerce_bool(parsed.get("ok", False))
     issue = str(parsed.get("issue") or "")
@@ -236,6 +274,7 @@ def verify_node(state: AgentState) -> dict:
         "iteration": state.iteration,
         "ok": ok,
         "issue": issue,
+        "duration_ms": duration_ms,
     }
     return {"verify_ok": ok, "verify_issue": issue, "history": state.history + [entry]}
 
@@ -255,6 +294,7 @@ def revise_node(state: AgentState) -> dict:
         if state.execution is not None
         else "ERROR: SQL was not executed."
     )
+    start = time.perf_counter()
     response = llm().invoke([
         ("system", prompts.revise_system()),
         ("user", prompts.revise_user().format(
@@ -263,8 +303,9 @@ def revise_node(state: AgentState) -> dict:
             sql=state.sql,
             execution=execution_text,
             issue=state.verify_issue,
-        )),
+        ) + _cache_bust_suffix()),
     ])
+    duration_ms = _duration_ms(start)
     sql = _extract_sql(response.content)
     iteration = state.iteration + 1
     return {
@@ -275,6 +316,7 @@ def revise_node(state: AgentState) -> dict:
             "iteration": iteration,
             "sql": sql,
             "issue": state.verify_issue,
+            "duration_ms": duration_ms,
         }],
     }
 

@@ -58,6 +58,10 @@ def camel_run_metadata(run_metadata: dict[str, str]) -> dict[str, str]:
         "inferenceBackend": run_metadata["inference_backend"],
         "promptVersion": run_metadata["prompt_version"],
         "agentVersion": run_metadata["agent_version"],
+        "verifyMode": run_metadata["verify_mode"],
+        "maxIterations": run_metadata["max_iterations"],
+        "promptProfile": run_metadata["prompt_profile"],
+        "llmCacheBust": run_metadata["llm_cache_bust"],
         "evalRunId": eval_run_id,
         "sessionId": eval_run_id,
     }
@@ -190,6 +194,7 @@ def eval_one(question: dict, agent_url: str, run_metadata: dict[str, str]) -> di
         "agent_error": agent_error,
         "failure_category": failure_category,
         "attempts": attempts,
+        "history": response_data.get("history", []),
     }
 
 
@@ -284,6 +289,10 @@ def main() -> None:
         "prompt_version": args.prompt_version,
         "agent_version": args.agent_version,
         "eval_run_id": args.run_id or default_run_id("eval"),
+        "verify_mode": os.environ.get("AGENT_VERIFY_MODE", "full"),
+        "max_iterations": os.environ.get("AGENT_MAX_ITERATIONS", "3"),
+        "prompt_profile": os.environ.get("AGENT_PROMPT_PROFILE", "normal"),
+        "llm_cache_bust": os.environ.get("AGENT_LLM_CACHE_BUST", "0"),
     }
 
     questions = [
