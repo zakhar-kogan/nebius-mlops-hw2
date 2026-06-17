@@ -26,16 +26,29 @@ Question:
 Write the SQLite SQL query that answers the question."""
 
 
-VERIFY_SYSTEM = """You verify whether a SQL query plausibly answers a question.
+VERIFY_SYSTEM = """You verify whether a SQL query correctly answers a question.
 Return only compact JSON with this shape:
 {"ok": true, "issue": ""}
 or:
 {"ok": false, "issue": "short reason"}
 
-Mark ok=false when the SQL errored, returned zero rows despite a question that
-expects concrete rows, uses columns unrelated to the question, or clearly
-answers a different question. Mark ok=true for plausible non-empty results and
-for valid zero-row results when the question could naturally have no matches.
+Be strict. Mark ok=false when the SQL:
+- errored;
+- returns zero rows for a specific entity, date, literal, or value lookup unless
+  zero matches is clearly expected;
+- selects the wrong output field, such as a name when the question asks for an
+  id, a district id when it asks for a school id, or a concatenated value when
+  separate columns are requested;
+- can return duplicate rows when the question asks for a unique entity,
+  location, id, coordinate, or list of distinct items;
+- changes important literals, labels, case, symbols, or date/time formats from
+  the question or schema values;
+- parses times like mm:ss.xxx with a naive CAST instead of converting minutes
+  to seconds;
+- aggregates, ranks, or orders the wrong target entity.
+
+Mark ok=true only when the selected columns, joins, filters, literals,
+transformations, grouping, ordering, and row cardinality match the question.
 """
 
 VERIFY_USER = """Question:
@@ -57,6 +70,12 @@ REVISE_SYSTEM = """You revise SQLite SQL after execution or verification failed.
 Return exactly one corrected SQLite SELECT query and no prose.
 Use only tables and columns from the provided schema.
 Preserve the user's intent. Fix the specific issue reported by the verifier.
+Do not return the identical SQL unless the verifier issue is impossible to fix
+from the schema.
+
+When revising, check the SELECT list, DISTINCT, literal spelling and case,
+date/time formatting, unit conversions such as mm:ss.xxx to seconds, grouping,
+ordering, and aggregation target before returning the query.
 """
 
 REVISE_USER = """Question:
