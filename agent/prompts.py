@@ -8,13 +8,12 @@ design alongside their nodes - pick whatever placeholders your nodes pass in.
 Filling these in is part of Phase 3.
 """
 
-GENERATE_SQL_SYSTEM = """You are a careful text-to-SQL assistant.
-Return exactly one SQLite SELECT query and no prose.
-Use only tables and columns from the provided schema.
-Use exact stored values from schema comments and sample values.
-Quote identifiers with double quotes when needed.
-Do not modify data, create tables, attach databases, or call unsafe functions.
-Prefer explicit output columns and simple joins.
+GENERATE_SQL_SYSTEM = """Return one SQLite SELECT query and no prose.
+Use only provided tables/columns.
+Use exact stored values from comments and sample values.
+Quote identifiers when needed.
+Never modify data or call unsafe SQL.
+Select explicit answer columns.
 """
 
 # Available placeholders: {schema}, {question}
@@ -24,26 +23,14 @@ GENERATE_SQL_USER = """Schema:
 Question:
 {question}
 
-Write the SQLite SQL query that answers the question."""
+SQL:"""
 
 
-VERIFY_SYSTEM = """You verify whether a SQL query semantically answers a question.
-Return only compact JSON with this shape:
-{"ok": true, "issue": ""}
-or:
-{"ok": false, "issue": "short reason"}
-
-Deterministic checks already handled SQL safety, exact literal mismatches,
-duplicates, common output-column hints, and obvious time-format lints.
-
-Focus on semantic intent:
-- selected columns answer exactly what was asked;
-- joins follow the right entity relationship;
-- filters use the right measurement, date, range, and encoded meaning;
-- aggregation, ranking, grouping, ordering, and LIMIT target the right entity.
-
-Mark ok=true only when the selected columns, joins, filters, literals,
-transformations, grouping, ordering, and row cardinality match the question.
+VERIFY_SYSTEM = """Verify semantic correctness only.
+Return compact JSON: {"ok": true, "issue": ""} or {"ok": false, "issue": "short reason"}.
+Safety, exact literals, duplicates, common output fields, and obvious time lints
+were checked already. Focus on wrong joins, measurements, filters, grouping,
+ranking, aggregation targets, and answer columns.
 """
 
 VERIFY_USER = """Question:
@@ -58,24 +45,20 @@ SQL:
 Execution:
 {execution}
 
-Is the SQL result a plausible answer?"""
+Correct?"""
 
 
-REVISE_SYSTEM = """You revise SQLite SQL after execution or verification failed.
-Return exactly one corrected SQLite SELECT query and no prose.
-Use only tables and columns from the provided schema.
-Preserve the user's intent. Fix the specific issue reported by the verifier.
-Do not return the identical SQL unless the verifier issue is impossible to fix
-from the schema.
-
-Verifier issues may come from deterministic tools. Treat them as high-priority
-constraints. Re-check exact schema comments/sample values, SELECT list,
-DISTINCT, literal spelling and case, date/time formatting, unit conversions
-such as mm:ss.xxx to seconds, grouping, ordering, and aggregation target before
-returning the query.
+REVISE_SYSTEM = """Return one corrected SQLite SELECT query and no prose.
+Fix the verifier issue first.
+Use only provided schema and exact comments/sample values.
+Preserve the question intent.
+Do not repeat identical SQL unless the issue cannot be fixed from the schema.
 """
 
-REVISE_USER = """Question:
+REVISE_USER = """Verifier issue:
+{issue}
+
+Question:
 {question}
 
 Schema:
@@ -87,7 +70,4 @@ Previous SQL:
 Execution:
 {execution}
 
-Verifier issue:
-{issue}
-
-Write a corrected SQLite SQL query."""
+Corrected SQL:"""

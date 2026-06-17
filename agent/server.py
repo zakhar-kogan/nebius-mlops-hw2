@@ -22,7 +22,7 @@ if os.environ.get("LANGFUSE_BASE_URL"):
 elif os.environ.get("LANGFUSE_HOST"):
     os.environ["LANGFUSE_BASE_URL"] = os.environ["LANGFUSE_HOST"]
 
-from agent.graph import AgentState, VLLM_BASE_URL, VLLM_MODEL, graph  # noqa: E402
+from agent.graph import AgentState, VLLM_BASE_URL, VLLM_MODEL, get_max_iterations, get_verify_mode, graph  # noqa: E402
 
 # Langfuse callback handler. If keys are set we initialize it; failures
 # are NOT swallowed - a misconfigured Langfuse should not silently
@@ -42,6 +42,8 @@ def _camel_metadata(db_id: str, tags: dict[str, str]) -> dict[str, str]:
         "dbId": db_id,
         "model": VLLM_MODEL,
         "backendBaseUrl": VLLM_BASE_URL,
+        "verifyMode": get_verify_mode(),
+        "maxIterations": str(get_max_iterations()),
     }
     key_map = {
         "environment": "environment",

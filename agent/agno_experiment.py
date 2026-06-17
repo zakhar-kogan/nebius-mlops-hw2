@@ -22,7 +22,7 @@ from pydantic import BaseModel, Field
 from agent import prompts
 from agent.deterministic_verifier import verify_deterministic
 from agent.execution import ExecutionResult, execute_sql
-from agent.graph import MAX_ITERATIONS, _extract_sql
+from agent.graph import _extract_sql, get_max_iterations, get_verify_mode
 from agent.schema import render_schema
 
 load_dotenv()
@@ -60,6 +60,8 @@ def _camel_metadata(db_id: str, tags: dict[str, str]) -> dict[str, str]:
         "model": VLLM_MODEL,
         "backendBaseUrl": VLLM_BASE_URL,
         "agentKind": "agno",
+        "verifyMode": get_verify_mode(),
+        "maxIterations": str(get_max_iterations()),
     }
     key_map = {
         "environment": "environment",
@@ -174,7 +176,8 @@ def _answer_core(req: AnswerRequest) -> AnswerResponse:
     execution: ExecutionResult | None = None
     iteration = 0
 
-    for iteration in range(1, MAX_ITERATIONS + 1):
+    max_iterations = get_max_iterations()
+    for iteration in range(1, max_iterations + 1):
         history.append({"node": "generate_sql" if iteration == 1 else "revise", "iteration": iteration, "sql": sql})
         execution = execute_sql(req.db, sql)
         history.append({
@@ -193,7 +196,7 @@ def _answer_core(req: AnswerRequest) -> AnswerResponse:
             "ok": issue is None,
             "issue": issue or "",
         })
-        if issue is None or iteration >= MAX_ITERATIONS:
+        if issue is None or iteration >= max_iterations:
             break
         sql = _revise_sql(req.question, schema, sql, execution, issue)
 

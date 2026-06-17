@@ -30,15 +30,35 @@ from agent.deterministic_verifier import verify_deterministic
 from agent.execution import ExecutionResult, execute_sql
 from agent.schema import render_schema
 
-# Total generate + revise calls before the loop is forced to stop.
-# 3-5 is a reasonable range; tune it as part of Phase 3.
-MAX_ITERATIONS = 3
+DEFAULT_MAX_ITERATIONS = 3
+VERIFY_MODE_FULL = "full"
+VERIFY_MODE_FAST = "fast"
+VERIFY_MODES = {VERIFY_MODE_FULL, VERIFY_MODE_FAST}
 
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")
 VLLM_MODEL = os.environ.get("VLLM_MODEL", "Qwen/Qwen3-30B-A3B-Instruct-2507")
 # vLLM ignores the key, but a hosted OpenAI-compatible provider needs a real one.
 # Lets you point the agent at e.g. OpenAI while iterating without a running vLLM.
 LLM_API_KEY = os.environ.get("OPENAI_API_KEY", "not-needed")
+
+
+def get_max_iterations() -> int:
+    raw = os.environ.get("AGENT_MAX_ITERATIONS", str(DEFAULT_MAX_ITERATIONS))
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_ITERATIONS
+
+
+def get_verify_mode() -> str:
+    mode = os.environ.get("AGENT_VERIFY_MODE", VERIFY_MODE_FULL).strip().lower()
+    if mode not in VERIFY_MODES:
+        return VERIFY_MODE_FULL
+    return mode
+
+
+# Backward-compatible export for code that imports the previous constant.
+MAX_ITERATIONS = DEFAULT_MAX_ITERATIONS
 
 
 @dataclass
@@ -116,7 +136,7 @@ def generate_sql_node(state: AgentState) -> dict:
 
     Build messages from the prompts, call the shared llm(), extract the SQL,
     and return only the state fields you changed. `iteration` is bumped here
-    (and in revise) so route_after_verify can enforce MAX_ITERATIONS.
+    (and in revise) so route_after_verify can enforce AGENT_MAX_ITERATIONS.
 
     This node is wired and ready; fill in GENERATE_SQL_SYSTEM / GENERATE_SQL_USER
     in prompts.py to make it produce real queries.
@@ -263,18 +283,20 @@ def route_after_verify(state: AgentState) -> str:
     """Conditional router: return "revise" to loop, "end" to terminate.
 
     Two reasons to end: the verifier was happy (state.verify_ok), or you've hit
-    the iteration cap (state.iteration >= MAX_ITERATIONS). Otherwise, revise.
+    the iteration cap (state.iteration >= AGENT_MAX_ITERATIONS). Otherwise, revise.
     """
-    if state.verify_ok or state.iteration >= MAX_ITERATIONS:
+    if state.verify_ok or state.iteration >= get_max_iterations():
         return "end"
     return "revise"
 
 
 def route_after_deterministic_verify(state: AgentState) -> str:
     if state.deterministic_issue:
-        if state.iteration >= MAX_ITERATIONS:
+        if state.iteration >= get_max_iterations():
             return "end"
         return "revise"
+    if get_verify_mode() == VERIFY_MODE_FAST:
+        return "end"
     return "verify"
 
 

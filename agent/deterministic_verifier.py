@@ -145,7 +145,10 @@ def _check_filter_literals(
     for literal, pos in _string_literals(sql):
         if not _is_filter_literal(sql, pos) or _skip_literal(literal):
             continue
-        match = _literal_match(db_id, literal)
+        columns = _literal_columns(db_id, sql, pos)
+        if not columns:
+            continue
+        match = _literal_match(db_id, literal, columns)
         if match == "exact":
             continue
         if match:
@@ -335,8 +338,49 @@ def _text_columns(db_id: str) -> tuple[tuple[str, str], ...]:
     return tuple(columns)
 
 
+def _literal_columns(db_id: str, sql: str, pos: int) -> tuple[tuple[str, str], ...]:
+    hint = _literal_column_hint(sql, pos)
+    if not hint:
+        return ()
+    normalized = _normalize_ident(hint)
+    return tuple(
+        (table, column)
+        for table, column in _text_columns(db_id)
+        if _normalize_ident(column) == normalized
+    )
+
+
+def _literal_column_hint(sql: str, pos: int) -> str | None:
+    prefix = sql[:pos]
+    tail = prefix[-220:]
+    direct = re.search(
+        r'(?:[A-Za-z_][\w]*\s*\.\s*)?("[^"]+"|`[^`]+`|[A-Za-z_][\w -]*)\s*'
+        r"(?:=|<>|!=|<=|>=|<|>|\blike\b)\s*$",
+        tail,
+        re.IGNORECASE,
+    )
+    if direct:
+        return direct.group(1)
+    in_match = re.search(
+        r'(?:[A-Za-z_][\w]*\s*\.\s*)?("[^"]+"|`[^`]+`|[A-Za-z_][\w -]*)\s+in\s*\([^)]*$',
+        tail,
+        re.IGNORECASE,
+    )
+    if in_match:
+        return in_match.group(1)
+    return None
+
+
+def _normalize_ident(identifier: str) -> str:
+    return identifier.strip().strip('"`[]').lower()
+
+
 @lru_cache(maxsize=512)
-def _literal_match(db_id: str, literal: str) -> str | None:
+def _literal_match(
+    db_id: str,
+    literal: str,
+    columns: tuple[tuple[str, str], ...],
+) -> str | None:
     path = db_path(db_id)
     variants = [literal]
     if re.search(r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", literal):
@@ -345,14 +389,14 @@ def _literal_match(db_id: str, literal: str) -> str | None:
         variants.append(literal[:-2])
 
     with sqlite3.connect(f"file:{path}?mode=ro", uri=True) as conn:
-        for table, column in _text_columns(db_id):
+        for table, column in columns:
             for variant in variants:
                 if _value_exists(conn, table, column, variant, exact=True):
                     return "exact" if variant == literal else variant
             exact_ci = _case_insensitive_value(conn, table, column, literal)
             if exact_ci is not None:
                 return exact_ci
-        for table, column in _text_columns(db_id):
+        for table, column in columns:
             close = _containing_value(conn, table, column, literal)
             if close is not None:
                 return close
