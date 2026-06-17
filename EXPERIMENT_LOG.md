@@ -39,6 +39,7 @@ Questions checked:
 |---|---|---|---:|---:|---:|---|---|
 | TBD | Nebius | `uv run python evals/run_eval.py --limit 3` | TBD | TBD | TBD | TBD | Smoke only. |
 | 2026-06-17 | Nebius hosted API | `.venv/bin/python evals/run_eval.py --out results/eval_baseline_tagged.json --environment staging --inference-backend hosted_api --prompt-version p0_baseline --agent-version a0_baseline --run-id baseline_tagged_20260617` | 36.7% | 36.7% | 0.419s | `results/eval_baseline_tagged.json` | Locked hosted baseline. 11/30 correct; all 19 failures were `wrong_rows`; per-iteration accuracy stayed flat, so revise did not recover errors. |
+| 2026-06-17 | Nebius hosted API | `.venv/bin/python evals/run_eval.py --out results/eval_iter1_strict_verifier.json --environment staging --inference-backend hosted_api --prompt-version p1_strict_verifier --agent-version a0_baseline --run-id iter1_strict_verifier_20260617` | 40.0% | 36.7% | 4.023s | `results/eval_iter1_strict_verifier.json` | Prompt-only verifier/reviser iteration. 12/30 correct; 18 failures remain `wrong_rows`; revisions increased from 4 to 8 questions. |
 | TBD | H100 vLLM | `uv run python evals/run_eval.py --out results/eval_baseline.json` | TBD | TBD | TBD | `results/eval_baseline.json` | Final baseline. |
 | TBD | H100 vLLM | `uv run python evals/run_eval.py --out results/eval_after_tuning.json` | TBD | TBD | TBD | `results/eval_after_tuning.json` | After serving tuning. |
 
@@ -47,6 +48,7 @@ Questions checked:
 | Iteration | Run | Observation | Hypothesis | Change | Result |
 |---:|---|---|---|---|---|
 | 0 | `baseline_tagged_20260617` | Executable SQL often returned the wrong rows. Examples: missing `DISTINCT`, wrong output column, literal/case/date mismatches, bad `mm:ss.xxx` time parsing, and aggregation over the wrong target. | The verifier is too permissive: it accepts plausible non-empty results instead of checking whether the selected columns, literals, date formats, and transformations match the question. | Baseline prompts `p0_baseline`; no change. | 11/30 correct, 36.7% accuracy; `wrong_rows` for every failure. |
+| 1 | `iter1_strict_verifier_20260617` | Tightening the verifier caused more questions to enter the revise loop. The Australian Grand Prix coordinate query was fixed by adding `DISTINCT`; no previously correct query regressed. | Prompt-only verification can catch simple cardinality/SELECT-list issues, but the model still lacks enough value evidence to fix schema-value mismatches and hard transformations reliably. | Updated verifier and reviser prompts only: stricter output-field, duplicate, literal/date/case, time parsing, and aggregation checks. | 12/30 correct, 40.0% accuracy; first-pass stayed 36.7%; per-iteration accuracy improved at iteration 2; p95 rose to 4.023s. |
 
 ## Load And Tuning Runs
 
