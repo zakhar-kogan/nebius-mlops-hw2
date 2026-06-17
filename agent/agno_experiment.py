@@ -16,6 +16,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
+from langfuse import observe, propagate_attributes
 from pydantic import BaseModel, Field
 
 from agent import prompts
@@ -25,6 +26,11 @@ from agent.graph import MAX_ITERATIONS, _extract_sql
 from agent.schema import render_schema
 
 load_dotenv()
+
+if os.environ.get("LANGFUSE_BASE_URL"):
+    os.environ["LANGFUSE_HOST"] = os.environ["LANGFUSE_BASE_URL"]
+elif os.environ.get("LANGFUSE_HOST"):
+    os.environ["LANGFUSE_BASE_URL"] = os.environ["LANGFUSE_HOST"]
 
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")
 VLLM_MODEL = os.environ.get("VLLM_MODEL", "Qwen/Qwen3-30B-A3B-Instruct-2507")
@@ -48,6 +54,52 @@ class AnswerResponse(BaseModel):
     history: list[dict[str, Any]] = Field(default_factory=list)
 
 
+def _camel_metadata(db_id: str, tags: dict[str, str]) -> dict[str, str]:
+    metadata = {
+        "dbId": db_id,
+        "model": VLLM_MODEL,
+        "backendBaseUrl": VLLM_BASE_URL,
+        "agentKind": "agno",
+    }
+    key_map = {
+        "environment": "environment",
+        "inference_backend": "inferenceBackend",
+        "prompt_version": "promptVersion",
+        "agent_version": "agentVersion",
+        "eval_run_id": "evalRunId",
+        "load_run_id": "loadRunId",
+        "session_id": "sessionId",
+        "run_type": "runType",
+    }
+    for source, target in key_map.items():
+        value = tags.get(source)
+        if value:
+            metadata[target] = value
+    metadata.setdefault("agentVersion", "a1_agno_experiment")
+    return metadata
+
+
+def _session_id(tags: dict[str, str]) -> str | None:
+    return tags.get("session_id") or tags.get("eval_run_id") or tags.get("load_run_id")
+
+
+def _trace_tags(tags: dict[str, str]) -> list[str]:
+    labels = [
+        tags.get("run_type"),
+        tags.get("environment"),
+        tags.get("inference_backend"),
+        tags.get("prompt_version"),
+        tags.get("agent_version") or "a1_agno_experiment",
+        "agno",
+    ]
+    return [label for label in labels if label]
+
+
+def _trace_name(tags: dict[str, str]) -> str:
+    run_type = tags.get("run_type") or "request"
+    return f"agent.answer.agno.{run_type}"
+
+
 def _load_agno() -> tuple[type[Any], type[Any]]:
     try:
         from agno.agent import Agent
@@ -57,6 +109,7 @@ def _load_agno() -> tuple[type[Any], type[Any]]:
     return Agent, OpenAIChat
 
 
+@observe(name="agno.llm", as_type="generation")
 def _run_agno(system: str, user: str) -> str:
     Agent, OpenAIChat = _load_agno()
     model = OpenAIChat(
@@ -70,6 +123,7 @@ def _run_agno(system: str, user: str) -> str:
     return str(getattr(response, "content", response))
 
 
+@observe(name="agno.generate_sql", as_type="chain")
 def _generate_sql(question: str, schema: str) -> str:
     return _extract_sql(
         _run_agno(
@@ -79,6 +133,7 @@ def _generate_sql(question: str, schema: str) -> str:
     )
 
 
+@observe(name="agno.revise_sql", as_type="chain")
 def _revise_sql(
     question: str,
     schema: str,
@@ -111,44 +166,36 @@ def _fallback_issue(execution: ExecutionResult | None) -> str:
     return "deterministic checks passed; Agno experiment stops after executable SQL"
 
 
-@app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok", "agent": "a1_agno_experiment"}
+@observe(name="agent.answer.agno", as_type="agent")
+def _answer_core(req: AnswerRequest) -> AnswerResponse:
+    schema = render_schema(req.db)
+    sql = _generate_sql(req.question, schema)
+    history: list[dict[str, Any]] = []
+    execution: ExecutionResult | None = None
+    iteration = 0
 
-
-@app.post("/answer", response_model=AnswerResponse)
-def answer(req: AnswerRequest) -> AnswerResponse:
-    try:
-        schema = render_schema(req.db)
-        sql = _generate_sql(req.question, schema)
-        history: list[dict[str, Any]] = []
-        execution: ExecutionResult | None = None
-
-        for iteration in range(1, MAX_ITERATIONS + 1):
-            history.append({"node": "generate_sql" if iteration == 1 else "revise", "iteration": iteration, "sql": sql})
-            execution = execute_sql(req.db, sql)
-            history.append({
-                "node": "execute",
-                "iteration": iteration,
-                "sql": sql,
-                "ok": execution.ok,
-                "row_count": execution.row_count,
-                "columns": execution.columns or [],
-                "error": execution.error,
-            })
-            issue = verify_deterministic(req.db, req.question, sql, execution)
-            history.append({
-                "node": "deterministic_verify",
-                "iteration": iteration,
-                "ok": issue is None,
-                "issue": issue or "",
-            })
-            if issue is None or iteration >= MAX_ITERATIONS:
-                break
-            sql = _revise_sql(req.question, schema, sql, execution, issue)
-
-    except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")
+    for iteration in range(1, MAX_ITERATIONS + 1):
+        history.append({"node": "generate_sql" if iteration == 1 else "revise", "iteration": iteration, "sql": sql})
+        execution = execute_sql(req.db, sql)
+        history.append({
+            "node": "execute",
+            "iteration": iteration,
+            "sql": sql,
+            "ok": execution.ok,
+            "row_count": execution.row_count,
+            "columns": execution.columns or [],
+            "error": execution.error,
+        })
+        issue = verify_deterministic(req.db, req.question, sql, execution)
+        history.append({
+            "node": "deterministic_verify",
+            "iteration": iteration,
+            "ok": issue is None,
+            "issue": issue or "",
+        })
+        if issue is None or iteration >= MAX_ITERATIONS:
+            break
+        sql = _revise_sql(req.question, schema, sql, execution, issue)
 
     if execution is None:
         return AnswerResponse(sql=sql, rows=None, iterations=0, ok=False, error="agent produced no execution result", history=history)
@@ -162,3 +209,24 @@ def answer(req: AnswerRequest) -> AnswerResponse:
         error=None if re.match(r"^\s*(select|with)\b", sql, re.IGNORECASE) else _fallback_issue(execution),
         history=history,
     )
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok", "agent": "a1_agno_experiment"}
+
+
+@app.post("/answer", response_model=AnswerResponse)
+def answer(req: AnswerRequest) -> AnswerResponse:
+    metadata = _camel_metadata(req.db, req.tags)
+    try:
+        with propagate_attributes(
+            session_id=_session_id(req.tags),
+            metadata=metadata,
+            version=req.tags.get("agent_version") or "a1_agno_experiment",
+            tags=_trace_tags(req.tags),
+            trace_name=_trace_name(req.tags),
+        ):
+            return _answer_core(req)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"{type(exc).__name__}: {exc}")

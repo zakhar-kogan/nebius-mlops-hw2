@@ -44,7 +44,7 @@ def _column_descriptions(db_id: str, table: str) -> dict[str, str]:
         return {}
 
     descriptions: dict[str, str] = {}
-    with path.open(newline="", encoding="utf-8-sig") as fh:
+    with path.open(newline="", encoding="utf-8-sig", errors="replace") as fh:
         reader = csv.DictReader(fh)
         for row in reader:
             name = (row.get("original_column_name") or "").strip()
