@@ -142,8 +142,8 @@ def generate_sql_node(state: AgentState) -> dict:
     in prompts.py to make it produce real queries.
     """
     response = llm().invoke([
-        ("system", prompts.GENERATE_SQL_SYSTEM),
-        ("user", prompts.GENERATE_SQL_USER.format(
+        ("system", prompts.generate_sql_system()),
+        ("user", prompts.generate_sql_user().format(
             schema=state.schema,
             question=state.question,
         )),
@@ -218,8 +218,8 @@ def verify_node(state: AgentState) -> dict:
         else "ERROR: SQL was not executed."
     )
     response = llm().invoke([
-        ("system", prompts.VERIFY_SYSTEM),
-        ("user", prompts.VERIFY_USER.format(
+        ("system", prompts.verify_system()),
+        ("user", prompts.verify_user().format(
             question=state.question,
             schema=state.schema,
             sql=state.sql,
@@ -256,8 +256,8 @@ def revise_node(state: AgentState) -> dict:
         else "ERROR: SQL was not executed."
     )
     response = llm().invoke([
-        ("system", prompts.REVISE_SYSTEM),
-        ("user", prompts.REVISE_USER.format(
+        ("system", prompts.revise_system()),
+        ("user", prompts.revise_user().format(
             question=state.question,
             schema=state.schema,
             sql=state.sql,

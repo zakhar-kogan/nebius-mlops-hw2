@@ -17,6 +17,17 @@ UNSAFE_RE = re.compile(
     r"\b(attach|alter|create|delete|detach|drop|insert|pragma|update|vacuum)\b",
     re.IGNORECASE,
 )
+LITERAL_FALLBACK_COLUMNS = {
+    "admission",
+    "date",
+    "element",
+    "format",
+    "label",
+    "name",
+    "rarity",
+    "status",
+    "time",
+}
 
 
 def verify_deterministic(
@@ -147,7 +158,7 @@ def _check_filter_literals(
             continue
         columns = _literal_columns(db_id, sql, pos)
         if not columns:
-            continue
+            columns = _fallback_literal_columns(db_id)
         match = _literal_match(db_id, literal, columns)
         if match == "exact":
             continue
@@ -347,6 +358,25 @@ def _literal_columns(db_id: str, sql: str, pos: int) -> tuple[tuple[str, str], .
         (table, column)
         for table, column in _text_columns(db_id)
         if _normalize_ident(column) == normalized
+    )
+
+
+def _fallback_literal_columns(db_id: str) -> tuple[tuple[str, str], ...]:
+    return tuple(
+        (table, column)
+        for table, column in _text_columns(db_id)
+        if _is_literal_fallback_column(column)
+    )
+
+
+def _is_literal_fallback_column(column: str) -> bool:
+    normalized = _normalize_ident(column)
+    return (
+        normalized in LITERAL_FALLBACK_COLUMNS
+        or normalized.endswith("date")
+        or normalized.endswith("time")
+        or normalized.endswith("status")
+        or normalized.endswith("name")
     )
 
 

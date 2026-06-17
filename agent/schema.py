@@ -12,6 +12,7 @@ that are not recoverable from SQLite types alone.
 from __future__ import annotations
 
 import csv
+import os
 import sqlite3
 from functools import lru_cache
 from pathlib import Path
@@ -35,6 +36,16 @@ def _comment(text: str, max_len: int = 220) -> str:
     if len(compact) > max_len:
         return compact[: max_len - 3].rstrip() + "..."
     return compact
+
+
+def _schema_cache_dir() -> Path | None:
+    raw = os.environ.get("AGENT_SCHEMA_CACHE_DIR", "").strip()
+    return Path(raw) if raw else None
+
+
+def _schema_cache_path(cache_dir: Path, db_id: str) -> Path:
+    safe = "".join(ch if ch.isalnum() or ch in {"_", "-"} else "_" for ch in db_id)
+    return cache_dir / f"{safe}.schema.txt"
 
 
 @lru_cache(maxsize=128)
@@ -111,8 +122,29 @@ def _sample_values(conn: sqlite3.Connection, table: str, column: str, ctype: str
     return [_comment(str(row[0]), 40) for row in rows]
 
 
-@lru_cache(maxsize=32)
 def render_schema(db_id: str) -> str:
+    cache_dir = _schema_cache_dir()
+    cache_key = str(cache_dir.resolve()) if cache_dir is not None else ""
+    return _render_schema_cached(db_id, cache_key)
+
+
+@lru_cache(maxsize=64)
+def _render_schema_cached(db_id: str, cache_key: str) -> str:
+    if cache_key:
+        cache_dir = Path(cache_key)
+        cache_path = _schema_cache_path(cache_dir, db_id)
+        if cache_path.exists():
+            return cache_path.read_text()
+
+        rendered = _render_schema_live(db_id)
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        cache_path.write_text(rendered)
+        return rendered
+
+    return _render_schema_live(db_id)
+
+
+def _render_schema_live(db_id: str) -> str:
     path = db_path(db_id)
     if not path.exists():
         raise FileNotFoundError(f"DB {db_id} not found at {path}. Did you run scripts/load_data.py?")
@@ -148,12 +180,26 @@ def render_schema(db_id: str) -> str:
                 col_lines.append(line)
             for fk in conn.execute(f"PRAGMA foreign_key_list({_q(t)})"):
                 # (id, seq, ref_table, from, to, on_update, on_delete, match)
+                if not fk[2] or not fk[3] or not fk[4]:
+                    continue
                 col_lines.append(
                     f"  FOREIGN KEY ({_q(fk[3])}) REFERENCES {_q(fk[2])}({_q(fk[4])})"
                 )
             parts.append(",\n".join(col_lines))
             parts.append(");")
     return "\n".join(parts)
+
+
+def prewarm_schemas(db_ids: list[str] | None = None) -> list[str]:
+    warmed = db_ids or available_dbs()
+    for db_id in warmed:
+        render_schema(db_id)
+    return warmed
+
+
+def clear_schema_caches() -> None:
+    _column_descriptions.cache_clear()
+    _render_schema_cached.cache_clear()
 
 
 def available_dbs() -> list[str]:

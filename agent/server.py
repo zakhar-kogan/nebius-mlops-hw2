@@ -22,13 +22,16 @@ if os.environ.get("LANGFUSE_BASE_URL"):
 elif os.environ.get("LANGFUSE_HOST"):
     os.environ["LANGFUSE_BASE_URL"] = os.environ["LANGFUSE_HOST"]
 
+from agent import prompts  # noqa: E402
 from agent.graph import AgentState, VLLM_BASE_URL, VLLM_MODEL, get_max_iterations, get_verify_mode, graph  # noqa: E402
+from agent.schema import prewarm_schemas  # noqa: E402
 
 # Langfuse callback handler. If keys are set we initialize it; failures
 # are NOT swallowed - a misconfigured Langfuse should not silently
 # produce zero traces.
 _lf_handler: Any = None
 _propagate_attributes: Any = None
+_schemas_ready = False
 if os.environ.get("LANGFUSE_PUBLIC_KEY") and os.environ.get("LANGFUSE_SECRET_KEY"):
     from langfuse import propagate_attributes
     from langfuse.langchain import CallbackHandler
@@ -44,6 +47,7 @@ def _camel_metadata(db_id: str, tags: dict[str, str]) -> dict[str, str]:
         "backendBaseUrl": VLLM_BASE_URL,
         "verifyMode": get_verify_mode(),
         "maxIterations": str(get_max_iterations()),
+        "promptProfile": prompts.get_prompt_profile(),
     }
     key_map = {
         "environment": "environment",
@@ -85,6 +89,13 @@ def _trace_name(tags: dict[str, str]) -> str:
 app = FastAPI()
 
 
+@app.on_event("startup")
+def startup() -> None:
+    global _schemas_ready
+    prewarm_schemas()
+    _schemas_ready = True
+
+
 class AnswerRequest(BaseModel):
     question: str
     db: str
@@ -101,8 +112,8 @@ class AnswerResponse(BaseModel):
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, str | bool]:
+    return {"status": "ok", "schemasReady": _schemas_ready}
 
 
 @app.post("/answer", response_model=AnswerResponse)

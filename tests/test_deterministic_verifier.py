@@ -62,6 +62,19 @@ class DeterministicVerifierTests(unittest.TestCase):
         )
         self.assertIn("Banned", issue or "")
 
+    def test_fallback_detects_literal_mismatch_when_column_parse_fails(self) -> None:
+        sql = (
+            'SELECT c."id" FROM "cards" c '
+            'JOIN "legalities" l ON c."uuid" = l."uuid" '
+            "WHERE lower(l.\"status\") = 'banned';"
+        )
+        issue = self.issue(
+            "card_games",
+            "List all the mythic rarity print cards banned in gladiator format.",
+            sql,
+        )
+        self.assertIn("Banned", issue or "")
+
     def test_detects_missing_timestamp_fraction(self) -> None:
         sql = (
             "SELECT u.Reputation FROM users u JOIN badges b ON u.Id = b.UserId "
