@@ -110,6 +110,13 @@ HTTP errors, and avoids the LLM verifier on deterministic passes. In eval it
 needed 50 SQL executions / deterministic checks across 30 questions, versus 55
 for `full` + `short`.
 
+Schema compaction remains promising rather than discarded: the aggressive schema
+profile preserved the best observed eval accuracy, 18/30, and improved first-pass
+accuracy to 11/30. I would explore it further because compact, well-targeted
+schema context should help quality; in this run it became a serving factor only
+because the aggressive profile still produced long-tail generation and context
+pressure under load.
+
 ## SLO Iteration Log
 
 Target: p95 end-to-end agent latency under 5 seconds at 10+ RPS for 5 minutes.
@@ -123,24 +130,30 @@ Target: p95 end-to-end agent latency under 5 seconds at 10+ RPS for 5 minutes.
 | 4 | Prompt p95 was ~4.8k tokens and large schemas dominated the prompt. The biggest rendered schemas were `european_football_2` (~16.7k chars), `card_games` (~14.3k), and `california_schools` (~13.3k). | Reducing schema annotation/sample verbosity should lower prefill cost without destroying quality. | Compact schema comments to 100 chars, include at most 3 sample values, and only sample categorical-like columns. Keep `fast` + `short`, 4 workers, and `max-model-len=8192`. | Quality dropped one question to 17/30. In load, prompt p95 fell to ~4.64k tokens, vLLM p95 improved to ~2.66s, KV max fell to 34%, and p95 OK latency improved to 6.66s with 2990/3000 OK. SLO still missed, but the targeted metrics moved in the expected direction. |
 | 5 | Compact schema helped serving but cost one eval question. The largest schemas were still above 8k rendered chars, so two hard-cap variants were tested on the full 30-question eval before load. | A token budget might keep quality while reducing prefill further; overly aggressive compaction may remove useful descriptions or produce burstier workload behavior. | Added `AGENT_SCHEMA_PROFILE=budget` and `aggressive`. Budget keeps capped samples/descriptions; aggressive removes most samples for huge schemas and omits table blocks if needed. | Budget eval fell to 16/30, so it was not load-tested. Aggressive eval recovered 18/30 with prompt p95 ~3.8k tokens in the 300s load, but serving saturated at 32 running and 91 waiting requests; p95 OK latency worsened to 21.06s with 2975/3000 OK. Short diagnostic loads showed schema rendering was not the cost (`attach_schema` p95 0ms) and revision count was not higher; the regression correlated with much longer generations/tails. Aggressive schema is therefore not the final config. |
 | 6 | Short diagnostic load also exposed context blow-ups during revise: one request tried to send ~294k input tokens, and several others were just over the 8192-token limit. | Execution previews fed back into revise were bounded by row count but not cell length; text-heavy result cells could create enormous prompts. | Added prompt-only execution rendering caps: truncate cell values to 160 chars and total rendered execution context to 4000 chars. | In a 60s diagnostic aggressive run, vLLM generation p95 max fell from ~5000 to ~182 tokens and vLLM p95 max fell from ~49s to ~4.21s. The giant 294k-token failure disappeared, but two near-8192 context errors remained and client p95 was still ~6.39s, so this is a promising candidate that still needs a full 300s load before becoming the final config. |
+| 7 | The 60s render-cap diagnostic looked promising, and the prior aggressive 300s run showed late vLLM waiting pressure. | Larger prefill batches might absorb bursts once huge execution previews were capped. | Combined render capping + aggressive schema with `--max-num-batched-tokens=16384` and ran a full 300s 10 RPS load. | Rejected. The run returned 2971/2997 OK with 21 timeouts and p95 OK latency 35.06s. vLLM still saturated late: running max 32, waiting max 107, prompt p95 ~4.3k, generation p95 max ~5000, vLLM e2e p95 max ~189.6s. The combined change worsened tail latency rather than fixing queue buildup. |
 
 Final SLO status: missed. Best latency run was 6.32s p95 with 4 agent workers
 and 4096 context, but it had many context-window HTTP errors. Best reliability
 run was compact schema + 8192 context with 2990/3000 OK and 6.66s p95.
 Aggressive schema compaction preserved 18/30 eval quality but is rejected for the
 final serving config because its 10 RPS load p95 regressed to 21.06s. Execution
-render capping is a later diagnostic fix; it needs a full 300s confirmation run
-before it should replace the compact-schema final candidate.
+render capping fixed a real prompt blow-up, but the full combined run with
+larger batching regressed to 35.06s p95, so the compact-schema run remains the
+best final candidate. The conclusion is not that schema compaction is harmful;
+it is that this implementation needs another iteration before its quality gain
+can be used without making serving latency the limiting factor.
 
 ## What I Would Do With More Time
 
 - Replace full-schema prompting with conservative table retrieval plus mandatory
   foreign-key bridge tables, then re-run the 30-question eval before load.
-- Try `--max-num-batched-tokens=16384` after schema reduction; the final run
-  still shows long-prefill pressure, but random vLLM flag changes were less
-  useful than first reducing prompt size.
-- Run a full 300s confirmation load for execution render capping, then combine
-  it with either compact schema or a stricter schema budget if near-8192 context
-  errors remain.
+- Continue schema compaction work specifically because it preserved the best
+  quality result. The next version should use a token-aware schema budget,
+  relation-preserving table selection, and a hard prompt guard so schema context
+  stops being a latency risk.
+- Run a full 300s confirmation load for execution render capping with compact
+  schema and the default `--max-num-batched-tokens=8192`.
+- Add a hard prompt-token guard before LLM calls so near-8192 prompts are
+  truncated or failed with a controlled agent error instead of becoming vLLM 400s.
 - Add request-level timeout/error categories to the agent response instead of
   surfacing vLLM context errors as HTTP 500s.
