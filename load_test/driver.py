@@ -56,6 +56,10 @@ def camel_run_metadata(run_metadata: dict[str, str]) -> dict[str, str]:
         "inferenceBackend": run_metadata["inference_backend"],
         "promptVersion": run_metadata["prompt_version"],
         "agentVersion": run_metadata["agent_version"],
+        "verifyMode": run_metadata["verify_mode"],
+        "maxIterations": run_metadata["max_iterations"],
+        "promptProfile": run_metadata["prompt_profile"],
+        "llmCacheBust": run_metadata["llm_cache_bust"],
         "loadRunId": load_run_id,
         "sessionId": load_run_id,
     }
@@ -115,6 +119,10 @@ async def drive(args: argparse.Namespace) -> None:
         "prompt_version": args.prompt_version,
         "agent_version": args.agent_version,
         "load_run_id": args.run_id or default_run_id("load"),
+        "verify_mode": os.environ.get("AGENT_VERIFY_MODE", "full"),
+        "max_iterations": os.environ.get("AGENT_MAX_ITERATIONS", "3"),
+        "prompt_profile": os.environ.get("AGENT_PROMPT_PROFILE", "normal"),
+        "llm_cache_bust": os.environ.get("AGENT_LLM_CACHE_BUST", "0"),
     }
     interval = 1.0 / args.rps
 
