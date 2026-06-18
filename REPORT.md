@@ -145,15 +145,17 @@ can be used without making serving latency the limiting factor.
 
 ## What I Would Do With More Time
 
+- Add hard prompt-token guards before every LLM call, with controlled truncation
+  or failure instead of vLLM 400s.
+- Continue schema compaction because it preserved the best quality result; make
+  it token-aware and relation-preserving.
 - Replace full-schema prompting with conservative table retrieval plus mandatory
-  foreign-key bridge tables, then re-run the 30-question eval before load.
-- Continue schema compaction work specifically because it preserved the best
-  quality result. The next version should use a token-aware schema budget,
-  relation-preserving table selection, and a hard prompt guard so schema context
-  stops being a latency risk.
-- Run a full 300s confirmation load for execution render capping with compact
-  schema and the default `--max-num-batched-tokens=8192`.
-- Add a hard prompt-token guard before LLM calls so near-8192 prompts are
-  truncated or failed with a controlled agent error instead of becoming vLLM 400s.
-- Add request-level timeout/error categories to the agent response instead of
-  surfacing vLLM context errors as HTTP 500s.
+  foreign-key bridge tables.
+- Set small per-node output limits, e.g. SQL generation/revision `max_tokens`
+  and verifier JSON `max_tokens`, to reduce generation-tail spikes.
+- Shrink revise prompts separately from generate prompts: referenced tables,
+  related keys, short execution preview, and verifier issue.
+- Tune deterministic verifier rules to keep checks that improve accuracy and
+  remove checks that create low-value revise churn.
+- Try app-side backpressure or lower `max-num-seqs` rather than larger batching;
+  `--max-num-batched-tokens=16384` worsened the tail.
