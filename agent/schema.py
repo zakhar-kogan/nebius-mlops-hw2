@@ -20,6 +20,34 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 DB_DIR = ROOT / "data" / "bird"
 DESCRIPTION_DIR = DB_DIR / "dev_20240627" / "dev_databases"
+COMMENT_MAX_LEN = 100
+SAMPLE_VALUE_MAX_LEN = 32
+SAMPLE_VALUE_LIMIT = 3
+SAMPLE_DISTINCT_LIMIT = 20
+CATEGORICAL_HINTS = (
+    "admission",
+    "answer",
+    "brand",
+    "category",
+    "class",
+    "code",
+    "color",
+    "department",
+    "element",
+    "format",
+    "gender",
+    "grade",
+    "label",
+    "level",
+    "method",
+    "rank",
+    "rarity",
+    "result",
+    "schooltype",
+    "sex",
+    "status",
+    "type",
+)
 
 
 def db_path(db_id: str) -> Path:
@@ -31,7 +59,7 @@ def _q(ident: str) -> str:
     return '"' + ident.replace('"', '""') + '"'
 
 
-def _comment(text: str, max_len: int = 220) -> str:
+def _comment(text: str, max_len: int = COMMENT_MAX_LEN) -> str:
     compact = " ".join(text.replace("*/", "").split())
     if len(compact) > max_len:
         return compact[: max_len - 3].rstrip() + "..."
@@ -97,6 +125,11 @@ def _is_text_like(name: str, ctype: str) -> bool:
     )
 
 
+def _is_categorical_candidate(column: str, ctype: str, description: str) -> bool:
+    probe = f"{column} {ctype} {description}".lower()
+    return any(token in probe for token in CATEGORICAL_HINTS)
+
+
 def _sample_values(conn: sqlite3.Connection, table: str, column: str, ctype: str) -> list[str]:
     if not _is_text_like(column, ctype):
         return []
@@ -108,18 +141,18 @@ def _sample_values(conn: sqlite3.Connection, table: str, column: str, ctype: str
         ).fetchone()[0]
     except sqlite3.Error:
         return []
-    if not count or count > 20:
+    if not count or count > SAMPLE_DISTINCT_LIMIT:
         return []
 
     try:
         rows = conn.execute(
             f"SELECT DISTINCT {_q(column)} FROM {_q(table)} "
             f"WHERE {_q(column)} IS NOT NULL AND CAST({_q(column)} AS TEXT) <> '' "
-            f"ORDER BY {_q(column)} LIMIT 8"
+            f"ORDER BY {_q(column)} LIMIT {SAMPLE_VALUE_LIMIT}"
         ).fetchall()
     except sqlite3.Error:
         return []
-    return [_comment(str(row[0]), 40) for row in rows]
+    return [_comment(str(row[0]), SAMPLE_VALUE_MAX_LEN) for row in rows]
 
 
 def render_schema(db_id: str) -> str:
@@ -170,9 +203,14 @@ def _render_schema_live(db_id: str) -> str:
                 if notnull and not pk:
                     line += " NOT NULL"
                 annotations: list[str] = []
-                if descriptions.get(name):
-                    annotations.append(descriptions[name])
-                samples = _sample_values(conn, t, name, ctype)
+                description = descriptions.get(name, "")
+                if description:
+                    annotations.append(description)
+                samples = (
+                    _sample_values(conn, t, name, ctype)
+                    if _is_categorical_candidate(name, ctype, description)
+                    else []
+                )
                 if samples:
                     annotations.append("sample values: " + ", ".join(repr(v) for v in samples))
                 if annotations:

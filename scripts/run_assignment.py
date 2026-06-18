@@ -157,7 +157,12 @@ def build_agent_env(args: argparse.Namespace) -> dict[str, str]:
     return env
 
 
-def start_agent(env: dict[str, str], run_id: str) -> tuple[subprocess.Popen[bytes], Path]:
+def start_agent(
+    env: dict[str, str],
+    run_id: str,
+    *,
+    workers: int,
+) -> tuple[subprocess.Popen[bytes], Path]:
     LOGS.mkdir(parents=True, exist_ok=True)
     log_path = LOGS / f"agent_{run_id}.log"
     log_file = log_path.open("wb")
@@ -171,6 +176,8 @@ def start_agent(env: dict[str, str], run_id: str) -> tuple[subprocess.Popen[byte
             "0.0.0.0",
             "--port",
             "8001",
+            "--workers",
+            str(workers),
         ],
         cwd=ROOT,
         env=env,
@@ -304,8 +311,9 @@ def run_job(args: argparse.Namespace) -> int:
     }
 
     try:
-        agent_proc, log_path = start_agent(env, run_id)
+        agent_proc, log_path = start_agent(env, run_id, workers=args.agent_workers)
         manifest["agentPid"] = agent_proc.pid
+        manifest["agentWorkers"] = args.agent_workers
         manifest["agentLogPath"] = str(log_path)
         manifest["preflight"] = check_services()
         manifest["vllmDrainBefore"] = wait_for_vllm_drain()
@@ -343,6 +351,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--keep-agent", action="store_true")
+    parser.add_argument("--agent-workers", type=int, default=1)
 
 
 def parse_args() -> argparse.Namespace:
