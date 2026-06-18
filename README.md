@@ -108,6 +108,17 @@ The optional Agno comparison agent is installed separately:
 uv sync --extra experiments
 ```
 
+Optional: if you use `mise`, trust the project config once, then install the
+pinned Python/uv toolchain and use the task aliases in `.mise.toml`:
+
+```bash
+mise trust .mise.toml
+mise install
+mise run sync
+mise run load-data
+mise run o11y
+```
+
 Sanity-check from your laptop browser:
 
   

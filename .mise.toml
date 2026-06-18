@@ -1,0 +1,27 @@
+[tools]
+python = "3.12"
+uv = "latest"
+
+[tasks.sync]
+description = "Install default Python dependencies"
+run = "uv sync"
+
+[tasks.sync-serve]
+description = "Install Python dependencies including local vLLM serving"
+run = "uv sync --extra serve"
+
+[tasks.sync-experiments]
+description = "Install Python dependencies including the Agno experiment"
+run = "uv sync --extra experiments"
+
+[tasks.load-data]
+description = "Load the BIRD subset"
+run = "uv run python scripts/load_data.py"
+
+[tasks.o11y]
+description = "Start the observability stack"
+run = "docker compose up -d"
+
+[tasks.vllm]
+description = "Start vLLM using the repo launch script"
+run = "scripts/start_vllm.sh"
