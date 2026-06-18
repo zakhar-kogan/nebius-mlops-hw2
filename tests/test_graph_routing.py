@@ -9,6 +9,7 @@ from agent.graph import (
     get_max_iterations,
     get_verify_mode,
     route_after_deterministic_verify,
+    route_after_execute,
     route_after_verify,
 )
 
@@ -32,6 +33,19 @@ class GraphRoutingTests(unittest.TestCase):
     def test_deterministic_pass_routes_to_llm_verifier_in_full_mode(self) -> None:
         with patch.dict(os.environ, {"AGENT_VERIFY_MODE": "full"}):
             self.assertEqual(route_after_deterministic_verify(self.state()), "verify")
+
+    def test_execute_routes_to_llm_verifier_in_llm_only_mode(self) -> None:
+        with patch.dict(os.environ, {"AGENT_VERIFY_MODE": "llm_only"}):
+            self.assertEqual(route_after_execute(self.state()), "verify")
+
+    def test_execute_routes_to_deterministic_verifier_in_full_mode(self) -> None:
+        with patch.dict(os.environ, {"AGENT_VERIFY_MODE": "full"}):
+            self.assertEqual(route_after_execute(self.state()), "deterministic_verify")
+
+    def test_invalid_verify_mode_falls_back_to_full(self) -> None:
+        with patch.dict(os.environ, {"AGENT_VERIFY_MODE": "nope"}):
+            self.assertEqual(get_verify_mode(), "full")
+            self.assertEqual(route_after_execute(self.state()), "deterministic_verify")
 
     def test_deterministic_pass_ends_in_fast_mode(self) -> None:
         with patch.dict(os.environ, {"AGENT_VERIFY_MODE": "fast"}):

@@ -35,7 +35,8 @@ from agent.schema import render_schema
 DEFAULT_MAX_ITERATIONS = 3
 VERIFY_MODE_FULL = "full"
 VERIFY_MODE_FAST = "fast"
-VERIFY_MODES = {VERIFY_MODE_FULL, VERIFY_MODE_FAST}
+VERIFY_MODE_LLM_ONLY = "llm_only"
+VERIFY_MODES = {VERIFY_MODE_FULL, VERIFY_MODE_FAST, VERIFY_MODE_LLM_ONLY}
 
 VLLM_BASE_URL = os.environ.get("VLLM_BASE_URL", "http://localhost:8000/v1")
 VLLM_MODEL = os.environ.get("VLLM_MODEL", "Qwen/Qwen3-30B-A3B-Instruct-2507")
@@ -342,6 +343,13 @@ def route_after_deterministic_verify(state: AgentState) -> str:
     return "verify"
 
 
+def route_after_execute(state: AgentState) -> str:
+    """Route baseline mode around deterministic checks."""
+    if get_verify_mode() == VERIFY_MODE_LLM_ONLY:
+        return "verify"
+    return "deterministic_verify"
+
+
 # ---- Graph wiring -----------------------------------------------------
 
 def build_graph():
@@ -356,7 +364,11 @@ def build_graph():
     g.add_edge(START, "attach_schema")
     g.add_edge("attach_schema", "generate_sql")
     g.add_edge("generate_sql", "execute")
-    g.add_edge("execute", "deterministic_verify")
+    g.add_conditional_edges(
+        "execute",
+        route_after_execute,
+        {"deterministic_verify": "deterministic_verify", "verify": "verify"},
+    )
     g.add_conditional_edges(
         "deterministic_verify",
         route_after_deterministic_verify,
