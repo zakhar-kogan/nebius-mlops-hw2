@@ -61,6 +61,7 @@ def camel_run_metadata(run_metadata: dict[str, str]) -> dict[str, str]:
         "verifyMode": run_metadata["verify_mode"],
         "maxIterations": run_metadata["max_iterations"],
         "promptProfile": run_metadata["prompt_profile"],
+        "schemaProfile": run_metadata["schema_profile"],
         "llmCacheBust": run_metadata["llm_cache_bust"],
         "evalRunId": eval_run_id,
         "sessionId": eval_run_id,
@@ -292,6 +293,7 @@ def main() -> None:
         "verify_mode": os.environ.get("AGENT_VERIFY_MODE", "full"),
         "max_iterations": os.environ.get("AGENT_MAX_ITERATIONS", "3"),
         "prompt_profile": os.environ.get("AGENT_PROMPT_PROFILE", "normal"),
+        "schema_profile": os.environ.get("AGENT_SCHEMA_PROFILE", "compact"),
         "llm_cache_bust": os.environ.get("AGENT_LLM_CACHE_BUST", "0"),
     }
 

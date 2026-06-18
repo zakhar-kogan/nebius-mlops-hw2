@@ -38,6 +38,26 @@ class SchemaCacheTests(unittest.TestCase):
                 self.assertEqual(warmed, ["superhero"])
                 self.assertTrue((Path(tmp) / "superhero.schema.txt").exists())
 
+    def test_schema_profile_changes_rendering_and_cache_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(
+                os.environ,
+                {"AGENT_SCHEMA_CACHE_DIR": tmp, "AGENT_SCHEMA_PROFILE": "budget"},
+            ):
+                budget = render_schema("superhero")
+                self.assertTrue((Path(tmp) / "superhero.budget.schema.txt").exists())
+
+            clear_schema_caches()
+
+            with patch.dict(
+                os.environ,
+                {"AGENT_SCHEMA_CACHE_DIR": tmp, "AGENT_SCHEMA_PROFILE": "aggressive"},
+            ):
+                aggressive = render_schema("superhero")
+                self.assertTrue((Path(tmp) / "superhero.aggressive.schema.txt").exists())
+
+        self.assertNotEqual(budget, aggressive)
+
 
 if __name__ == "__main__":
     unittest.main()

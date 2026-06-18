@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import json
 import os
@@ -59,9 +60,43 @@ def camel_run_metadata(run_metadata: dict[str, str]) -> dict[str, str]:
         "verifyMode": run_metadata["verify_mode"],
         "maxIterations": run_metadata["max_iterations"],
         "promptProfile": run_metadata["prompt_profile"],
+        "schemaProfile": run_metadata["schema_profile"],
         "llmCacheBust": run_metadata["llm_cache_bust"],
         "loadRunId": load_run_id,
         "sessionId": load_run_id,
+    }
+
+
+def summarize_agent_response(response_data: dict) -> dict:
+    history = response_data.get("history") or []
+    node_counts: Counter[str] = Counter()
+    node_duration_ms: defaultdict[str, float] = defaultdict(float)
+    node_max_duration_ms: defaultdict[str, float] = defaultdict(float)
+
+    for event in history:
+        node = str(event.get("node") or "unknown")
+        node_counts[node] += 1
+        duration = event.get("duration_ms")
+        if isinstance(duration, int | float):
+            node_duration_ms[node] += float(duration)
+            node_max_duration_ms[node] = max(node_max_duration_ms[node], float(duration))
+
+    sql = response_data.get("sql") or ""
+    return {
+        "agent_ok": response_data.get("ok"),
+        "agent_error": response_data.get("error"),
+        "iterations": response_data.get("iterations"),
+        "sql_length": len(sql),
+        "history_event_count": len(history),
+        "history_node_counts": dict(sorted(node_counts.items())),
+        "history_node_duration_ms": {
+            node: round(duration, 3)
+            for node, duration in sorted(node_duration_ms.items())
+        },
+        "history_node_max_duration_ms": {
+            node: round(duration, 3)
+            for node, duration in sorted(node_max_duration_ms.items())
+        },
     }
 
 
@@ -69,6 +104,7 @@ async def fire_one(
     session: aiohttp.ClientSession,
     url: str,
     question: dict,
+    request_index: int,
     results: list[dict],
     run_metadata: dict[str, str],
 ) -> None:
@@ -84,6 +120,7 @@ async def fire_one(
     t0 = time.monotonic()
     status = "ok"
     err: str | None = None
+    diagnostics: dict = {}
     try:
         timeout = aiohttp.ClientTimeout(total=120)
         async with session.post(url, json=payload, timeout=timeout) as resp:
@@ -91,15 +128,24 @@ async def fire_one(
             if resp.status != 200:
                 status = "http_error"
                 err = f"HTTP {resp.status}: {body[:500]}"
+            else:
+                try:
+                    diagnostics = summarize_agent_response(json.loads(body))
+                except json.JSONDecodeError as exc:
+                    status = "client_error"
+                    err = f"JSONDecodeError: {exc}"
     except asyncio.TimeoutError:
         status = "timeout"
     except Exception as e:  # noqa: BLE001
         status = "client_error"
         err = f"{type(e).__name__}: {e}"
     results.append({
+        "request_index": request_index,
+        "db_id": question["db_id"],
         "latency_seconds": time.monotonic() - t0,
         "status": status,
         "error": err,
+        **diagnostics,
     })
 
 
@@ -122,6 +168,7 @@ async def drive(args: argparse.Namespace) -> None:
         "verify_mode": os.environ.get("AGENT_VERIFY_MODE", "full"),
         "max_iterations": os.environ.get("AGENT_MAX_ITERATIONS", "3"),
         "prompt_profile": os.environ.get("AGENT_PROMPT_PROFILE", "normal"),
+        "schema_profile": os.environ.get("AGENT_SCHEMA_PROFILE", "compact"),
         "llm_cache_bust": os.environ.get("AGENT_LLM_CACHE_BUST", "0"),
     }
     interval = 1.0 / args.rps
@@ -135,7 +182,7 @@ async def drive(args: argparse.Namespace) -> None:
         while time.monotonic() < deadline:
             q = rnd.choice(questions)
             tasks.append(asyncio.create_task(
-                fire_one(session, args.agent_url, q, results, run_metadata)
+                fire_one(session, args.agent_url, q, len(tasks), results, run_metadata)
             ))
             next_fire += interval
             sleep_for = next_fire - time.monotonic()

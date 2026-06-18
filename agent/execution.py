@@ -11,6 +11,9 @@ from dataclasses import dataclass
 
 from agent.schema import db_path
 
+MAX_RENDER_CELL_CHARS = 160
+MAX_RENDER_CHARS = 4000
+
 
 @dataclass
 class ExecutionResult:
@@ -20,18 +23,33 @@ class ExecutionResult:
     error: str | None = None
     row_count: int = 0
 
-    def render(self, max_rows: int = 10) -> str:
+    def render(
+        self,
+        max_rows: int = 10,
+        max_cell_chars: int = MAX_RENDER_CELL_CHARS,
+        max_chars: int = MAX_RENDER_CHARS,
+    ) -> str:
         """Compact text rendering for prompt context."""
         if not self.ok:
             return f"ERROR: {self.error}"
         if self.row_count == 0:
             return "OK: 0 rows returned."
         cols = ", ".join(self.columns or [])
+
+        def compact_cell(value: object) -> str:
+            text = " ".join(str(value).split())
+            if len(text) > max_cell_chars:
+                return text[: max_cell_chars - 3].rstrip() + "..."
+            return text
+
         preview = "\n".join(
-            " | ".join(str(c) for c in row) for row in (self.rows or [])[:max_rows]
+            " | ".join(compact_cell(c) for c in row) for row in (self.rows or [])[:max_rows]
         )
         more = f"\n... ({self.row_count - max_rows} more rows)" if self.row_count > max_rows else ""
-        return f"OK: {self.row_count} rows.\nCOLUMNS: {cols}\nFIRST ROWS:\n{preview}{more}"
+        rendered = f"OK: {self.row_count} rows.\nCOLUMNS: {cols}\nFIRST ROWS:\n{preview}{more}"
+        if len(rendered) > max_chars:
+            return rendered[: max_chars - 3].rstrip() + "..."
+        return rendered
 
 
 def execute_sql(db_id: str, sql: str, timeout_seconds: float = 5.0) -> ExecutionResult:

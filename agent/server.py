@@ -24,7 +24,7 @@ elif os.environ.get("LANGFUSE_HOST"):
 
 from agent import prompts  # noqa: E402
 from agent.graph import AgentState, VLLM_BASE_URL, VLLM_MODEL, get_max_iterations, get_verify_mode, graph, llm_cache_bust_enabled  # noqa: E402
-from agent.schema import prewarm_schemas  # noqa: E402
+from agent.schema import get_schema_profile, prewarm_schemas  # noqa: E402
 
 # Langfuse callback handler. If keys are set we initialize it; failures
 # are NOT swallowed - a misconfigured Langfuse should not silently
@@ -48,6 +48,7 @@ def _camel_metadata(db_id: str, tags: dict[str, str]) -> dict[str, str]:
         "verifyMode": get_verify_mode(),
         "maxIterations": str(get_max_iterations()),
         "promptProfile": prompts.get_prompt_profile(),
+        "schemaProfile": get_schema_profile(),
         "llmCacheBust": str(llm_cache_bust_enabled()).lower(),
     }
     key_map = {

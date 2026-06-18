@@ -75,9 +75,13 @@ Panels cover:
 
 Screenshots:
 
-- `screenshots/grafana_serving.png`: TBD.
-- `screenshots/langfuse_trace.png`: TBD.
-- `screenshots/langfuse_tags.png`: TBD.
+- `screenshots/vllm_manual_query.png`: vLLM OpenAI-compatible endpoint returning SQL.
+- `screenshots/grafana_serving.png`: Grafana dashboard with vLLM panels during load.
+- `screenshots/grafana_eval_run.png`: Grafana dashboard during a baseline eval run.
+- `screenshots/grafana_before.png`: before/early tuning dashboard view.
+- `screenshots/grafana_after.png`: after tuning dashboard view.
+- `screenshots/langfuse_trace.png`: Langfuse trace showing the agent loop.
+- `screenshots/langfuse_tags.png`: Langfuse trace list with run metadata tags.
 
 ## Eval Results
 
@@ -91,6 +95,8 @@ Baseline result file: `results/eval_baseline.json`.
 | Short prompt | `full` / `short` | 17/30 (56.7%) | 9/30 (30.0%) | 9/30 | 16/30 | 17/30 | 2.450s |
 | Fast + short | `fast` / `short` | 18/30 (60.0%) | 10/30 (33.3%) | 10/30 | 17/30 | 18/30 | 2.190s |
 | Compact schema | `fast` / `short` | 17/30 (56.7%) | 10/30 (33.3%) | 10/30 | 16/30 | 17/30 | 2.288s |
+| Budget schema | `fast` / `short` + budget schema | 16/30 (53.3%) | 10/30 (33.3%) | 10/30 | 14/30 | 16/30 | 2.269s |
+| Aggressive schema | `fast` / `short` + aggressive schema | 18/30 (60.0%) | 11/30 (36.7%) | 11/30 | 16/30 | 18/30 | 2.551s |
 | After tuning | `fast` / `short` + compact schema | 17/30 (56.7%) | 10/30 (33.3%) | 10/30 | 16/30 | 17/30 | 2.293s |
 
 Baseline commentary: the loop does some work even without deterministic checks,
@@ -115,10 +121,16 @@ Target: p95 end-to-end agent latency under 5 seconds at 10+ RPS for 5 minutes.
 | 2 | With selected agent, vLLM was healthy during load: p95 ~3.42s and waiting max 4, while end-to-end p95 was 82.28s. | Single agent worker was causing application-layer backlog before/around vLLM calls. | Kept agent/vLLM fixed and ran uvicorn with 4 workers. | p95 OK latency dropped to 6.32s, OK responses rose to 2711/3000, vLLM p95 was ~2.36s, waiting max 0, KV max 24%. SLO still missed narrowly and HTTP 500s remained. |
 | 3 | Raising workers from 4 to 8 kept vLLM healthy but did not improve p95: 6.55s, vLLM p95 ~2.30s, waiting max 0. Captured error bodies showed most HTTP 500s were vLLM context errors: prompts exceeded `--max-model-len 4096` by up to ~830 tokens. | Remaining failures are from context-window truncation/rejection, not queue depth. KV cache headroom was still large (~25%), so a longer context should be feasible. | Keep selected agent and workers=4, increase vLLM `--max-model-len` from 4096 to 8192. | Reliability improved sharply: 2989/3000 OK, 10 timeouts, 1 HTTP 500. But p95 OK latency worsened to 7.13s because long prompts were now admitted instead of failing fast. vLLM prompt p95 rose from ~2.0k to ~4.8k tokens, vLLM p95 was ~3.40s, waiting max 4, KV max 42%. SLO still missed; next target is schema/prompt compaction. |
 | 4 | Prompt p95 was ~4.8k tokens and large schemas dominated the prompt. The biggest rendered schemas were `european_football_2` (~16.7k chars), `card_games` (~14.3k), and `california_schools` (~13.3k). | Reducing schema annotation/sample verbosity should lower prefill cost without destroying quality. | Compact schema comments to 100 chars, include at most 3 sample values, and only sample categorical-like columns. Keep `fast` + `short`, 4 workers, and `max-model-len=8192`. | Quality dropped one question to 17/30. In load, prompt p95 fell to ~4.64k tokens, vLLM p95 improved to ~2.66s, KV max fell to 34%, and p95 OK latency improved to 6.66s with 2990/3000 OK. SLO still missed, but the targeted metrics moved in the expected direction. |
+| 5 | Compact schema helped serving but cost one eval question. The largest schemas were still above 8k rendered chars, so two hard-cap variants were tested on the full 30-question eval before load. | A token budget might keep quality while reducing prefill further; overly aggressive compaction may remove useful descriptions or produce burstier workload behavior. | Added `AGENT_SCHEMA_PROFILE=budget` and `aggressive`. Budget keeps capped samples/descriptions; aggressive removes most samples for huge schemas and omits table blocks if needed. | Budget eval fell to 16/30, so it was not load-tested. Aggressive eval recovered 18/30 with prompt p95 ~3.8k tokens in the 300s load, but serving saturated at 32 running and 91 waiting requests; p95 OK latency worsened to 21.06s with 2975/3000 OK. Short diagnostic loads showed schema rendering was not the cost (`attach_schema` p95 0ms) and revision count was not higher; the regression correlated with much longer generations/tails. Aggressive schema is therefore not the final config. |
+| 6 | Short diagnostic load also exposed context blow-ups during revise: one request tried to send ~294k input tokens, and several others were just over the 8192-token limit. | Execution previews fed back into revise were bounded by row count but not cell length; text-heavy result cells could create enormous prompts. | Added prompt-only execution rendering caps: truncate cell values to 160 chars and total rendered execution context to 4000 chars. | In a 60s diagnostic aggressive run, vLLM generation p95 max fell from ~5000 to ~182 tokens and vLLM p95 max fell from ~49s to ~4.21s. The giant 294k-token failure disappeared, but two near-8192 context errors remained and client p95 was still ~6.39s, so this is a promising candidate that still needs a full 300s load before becoming the final config. |
 
 Final SLO status: missed. Best latency run was 6.32s p95 with 4 agent workers
 and 4096 context, but it had many context-window HTTP errors. Best reliability
 run was compact schema + 8192 context with 2990/3000 OK and 6.66s p95.
+Aggressive schema compaction preserved 18/30 eval quality but is rejected for the
+final serving config because its 10 RPS load p95 regressed to 21.06s. Execution
+render capping is a later diagnostic fix; it needs a full 300s confirmation run
+before it should replace the compact-schema final candidate.
 
 ## What I Would Do With More Time
 
@@ -127,5 +139,8 @@ run was compact schema + 8192 context with 2990/3000 OK and 6.66s p95.
 - Try `--max-num-batched-tokens=16384` after schema reduction; the final run
   still shows long-prefill pressure, but random vLLM flag changes were less
   useful than first reducing prompt size.
+- Run a full 300s confirmation load for execution render capping, then combine
+  it with either compact schema or a stricter schema budget if near-8192 context
+  errors remain.
 - Add request-level timeout/error categories to the agent response instead of
   surfacing vLLM context errors as HTTP 500s.

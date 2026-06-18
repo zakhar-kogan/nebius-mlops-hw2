@@ -146,6 +146,7 @@ def build_agent_env(args: argparse.Namespace) -> dict[str, str]:
     env["AGENT_VERIFY_MODE"] = args.mode
     env["AGENT_MAX_ITERATIONS"] = str(args.max_iterations)
     env["AGENT_PROMPT_PROFILE"] = args.prompt_profile
+    env["AGENT_SCHEMA_PROFILE"] = args.schema_profile
     if args.schema_cache_dir:
         env["AGENT_SCHEMA_CACHE_DIR"] = str(args.schema_cache_dir)
     else:
@@ -301,6 +302,7 @@ def run_job(args: argparse.Namespace) -> int:
         "verifyMode": args.mode,
         "maxIterations": str(args.max_iterations),
         "promptProfile": args.prompt_profile,
+        "schemaProfile": args.schema_profile,
         "llmCacheBust": str(args.llm_cache_bust).lower(),
         "schemaCacheDir": str(args.schema_cache_dir) if args.schema_cache_dir else "",
         "resultPath": str(out_path),
@@ -342,6 +344,7 @@ def add_common_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--mode", default="llm_only", choices=sorted(VERIFY_MODES))
     parser.add_argument("--max-iterations", type=int, default=3)
     parser.add_argument("--prompt-profile", default="normal", choices=["normal", "short"])
+    parser.add_argument("--schema-profile", default="compact", choices=["compact", "budget", "aggressive"])
     parser.add_argument("--schema-cache-dir", type=Path, default=None)
     parser.add_argument("--llm-cache-bust", action="store_true")
     parser.add_argument("--environment", default="prod")
